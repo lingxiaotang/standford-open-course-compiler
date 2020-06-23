@@ -15,7 +15,7 @@ import java_cup.runtime.Symbol;
 
     // Max size of string constants
     static int MAX_STR_CONST = 1025;
-    private int current_length=0;
+    
 
     // For assembling string constants
     StringBuffer string_buf = new StringBuffer();
@@ -35,12 +35,13 @@ import java_cup.runtime.Symbol;
 	return filename;
     }
 
-   
+    /*auxilary variables for dealing with comments*/
     private int nested_comment=0;
-    private boolean is_string_legal=true;
     private int comment_type=0; 
-    private int str_state=0;
-
+    /*auxilary variables for dealing with string*/
+    private boolean has_met_slash=false;
+    private boolean has_met_null=false;
+    private boolean eof_encountered=false;
 %}
 
 %init{
@@ -65,18 +66,27 @@ import java_cup.runtime.Symbol;
 	/* nothing special to do in the initial state */
 	break;
     case COMMENT:
-      flag=1;
-    break;
+      if(eof_encountered==true) break;
+      else
+      {
+        if(comment_type==1)
+	{
+	  eof_encountered=true;
+	  return new Symbol(TokenConstants.ERROR,"ERROR:EOF in comment");
+        }
+	else
+	{
+	  eof_encountered=true;
+	}
+      }
     case STRING:
-      flag=-1;
-    break;
+      if(eof_encountered==true) break;
+      else{
+      eof_encountered=true;
+       return new Symbol(TokenConstants.ERROR,"ERROR:String contains EOF");
+      }
     }
-    if(flag==0)
-       return new Symbol(TokenConstants.EOF);
-    else if(flag==1)
-       return new Symbol(TokenConstants.ERROR,"EOF in comment");
-    else
-       return new Symbol(TokenConstants.ERROR,"String contains EOF");
+    return new Symbol(TokenConstants.EOF);
 %eofval}
 
 %class CoolLexer
@@ -84,7 +94,7 @@ import java_cup.runtime.Symbol;
 %state STRING
 %state COMMENT
 
-whitespace=[ \f\r\t]
+whitespace=[ \f\r\t\013]
 integer=[0-9]+
 type_identifier=[A-Z][A-Za-z0-9_]*
 object_identifier=[a-z][A-Za-z0-9_]*
@@ -94,8 +104,8 @@ object_identifier=[a-z][A-Za-z0-9_]*
 
 <YYINITIAL>    [Cc][Ll][Aa][Ss][Ss] { return new Symbol(TokenConstants.CLASS);}
 <YYINITIAL>    [Ee][Ll][Ss][Ee] { return new Symbol(TokenConstants.ELSE);}   
-<YYINITIAL>    f[Aa][Ll][Ss][Ee] {return new Symbol(TokenConstants.BOOL_CONST,new Boolean(true));}
-<YYINITIAL>    t[Rr][Uu][Ee] { return new Symbol(TokenConstants.BOOL_CONST,new Boolean(false));}
+<YYINITIAL>   f[Aa][Ll][Ss][Ee] {return new Symbol(TokenConstants.BOOL_CONST,new Boolean(false));}
+<YYINITIAL>    t[Rr][Uu][Ee] { return new Symbol(TokenConstants.BOOL_CONST,new Boolean(true));}
 <YYINITIAL>    [Ii][Ff] { return new Symbol(TokenConstants.IF);}
 <YYINITIAL>    [Ff][Ii] {return new Symbol(TokenConstants.FI);}
 <YYINITIAL>    [Ii][Nn] { return new Symbol(TokenConstants.IN);}
@@ -117,9 +127,9 @@ object_identifier=[a-z][A-Za-z0-9_]*
 <YYINITIAL>    {integer} { return new Symbol(TokenConstants.INT_CONST,AbstractTable.inttable.addString(yytext()));}
 <YYINITIAL>    {type_identifier} { return new Symbol(TokenConstants.TYPEID,AbstractTable.idtable.addString(yytext()));}
 <YYINITIAL>    {object_identifier} { return new Symbol(TokenConstants.OBJECTID,AbstractTable.idtable.addString(yytext()));}
-<YYINITIAL>    "--"  {comment_type=0; yy_lexical_state=COMMENT;yybegin(COMMENT);}
-<YYINITIAL>    "(*"  {comment_type=1; yy_lexical_state=COMMENT;nested_comment++;yybegin(COMMENT);}
-<YYINITIAL>    "*)"  {return new Symbol(TokenConstants.ERROR,"Unmatched *)");}
+<YYINITIAL>    "--"  {comment_type=0;yybegin(COMMENT);}
+<YYINITIAL>    "(*"  {comment_type=1;nested_comment++;yybegin(COMMENT);}
+<YYINITIAL>    "*)"  {nested_comment=0;return new Symbol(TokenConstants.ERROR,"Unmatched *)");}
 <YYINITIAL>    "*"   { return new Symbol(TokenConstants.MULT);   }
 <YYINITIAL>    "=>"  { return new Symbol(TokenConstants.DARROW); }
 <YYINITIAL>    "("   { return new Symbol(TokenConstants.LPAREN); }
@@ -139,93 +149,117 @@ object_identifier=[a-z][A-Za-z0-9_]*
 <YYINITIAL>    "}"   { return new Symbol(TokenConstants.RBRACE); }
 <YYINITIAL>    "@"   { return new Symbol(TokenConstants.AT);     }
 <YYINITIAL>    "~"   { return new Symbol(TokenConstants.NEG);    }
-<YYINITIAL>    \"  { yy_lexical_state=STRING;yybegin(STRING);string_buf.setLength(0);}
+<YYINITIAL>    \"  {yybegin(STRING);string_buf.setLength(0);}
 
 
 <STRING> \"
     {
-      if(str_state==1)
+        if(has_met_slash==true)
 	{
 	  string_buf.append("\"");
-	  str_state=0;
+	  has_met_slash=false;
 	}
-      else{
-        yy_lexical_state=YYINITIAL;yybegin(YYINITIAL);
-        if(current_length<=MAX_STR_CONST&&is_string_legal==true)
+        else if(has_met_null==true)
         {
+	    has_met_null=false;
             yybegin(YYINITIAL);
-            current_length=0;
-            return new Symbol(TokenConstants.STR_CONST,AbstractTable.idtable.addString(new String(string_buf)));
+            return new Symbol(TokenConstants.ERROR,"String contains null character");
         }
-        else if(current_length>MAX_STR_CONST)
+        else if(string_buf.length()>=MAX_STR_CONST)
         {
             yybegin(YYINITIAL);
-            current_length=0;
             return new Symbol(TokenConstants.ERROR,"String constant too long");
         }
         else
         {
-            yybegin(YYINITIAL);/*do nothing if string contains null */
-	    current_length=0;
-	    return new Symbol(TokenConstants.ERROR,"String contains null character");
+            yybegin(YYINITIAL);
+	    return new Symbol(TokenConstants.STR_CONST,(StringSymbol)AbstractTable.stringtable.addString(string_buf.toString()));
         }
-      }
     }
-<STRING>  \\ 
+   
+<STRING>  \\
 {
-  if(str_state==0)
-    str_state=1;
+  if(has_met_slash==false)
+  {
+    has_met_slash=true;
+  }
   else
     {
-      str_state=0;
+      has_met_slash=false;
       string_buf.append("\\");
     }
 }
 <STRING>  \\b 
 {
-  if(str_state==0)
+  if(has_met_slash==false)
     string_buf.append('\b');
   else
     {
       string_buf.append("\\b");
-      str_state=0;
+      has_met_slash=false;
     }
 }
 <STRING>  \\t
 {
-  if(str_state==0)
+  if(has_met_slash==false)
     string_buf.append('\t');
   else
     {
       string_buf.append("\\t");
-      str_state=0;
+      has_met_slash=false;
     }
 }
 <STRING>  \\n
 {
-  if(str_state==0)
+  if(has_met_slash==false)
     string_buf.append('\n');
   else
     {
       string_buf.append("\\n");
-      str_state=0;
+      has_met_slash=false;
     }
 }
 <STRING>  \\f
 {
-  if(str_state==0)
+  if(has_met_slash==false)
     string_buf.append('\f');
   else
     {
       string_buf.append("\\f");
-      str_state=0;
+      has_met_slash=false;
     }
 
 }
-<STRING>  \n  {curr_lineno++;yybegin(YYINITIAL);return new Symbol(TokenConstants.ERROR,"Unterminated string constant");}
-<STRING>  \0  {is_string_legal=false;return new Symbol(TokenConstants.ERROR,"String contains null character");}
-<STRING>  [^\b\t\n\f]  {string_buf.append(yytext());String s=new String(yytext());current_length+=s.length();}
- 
+<STRING>  \n  
+{
+  curr_lineno++;
+  if(has_met_slash==true)
+  {
+    string_buf.append('\n');
+    has_met_slash=false;
+  }
+  else
+  {
+    yybegin(YYINITIAL);
+    return new Symbol(TokenConstants.ERROR,"Unterminated string constant");
+  }
+}
+<STRING> \0
+{
+  has_met_null=true;
+}
+<STRING>  [^\n\"]  
+{
+  if(has_met_slash==true)
+  {
+    has_met_slash=false;
+    string_buf.append(yytext());
+  }
+  else{
+  String tmp=yytext();
+  string_buf.append(tmp);
+  }
+} 
 
 
 <COMMENT>    "(*"  {nested_comment++;}
@@ -234,7 +268,6 @@ object_identifier=[a-z][A-Za-z0-9_]*
         nested_comment--;
         if(nested_comment==0)
         {
-            yy_lexical_state=YYINITIAL;
             yybegin(YYINITIAL);
         }
     }
@@ -250,6 +283,7 @@ object_identifier=[a-z][A-Za-z0-9_]*
      curr_lineno++;
   }
 }
-<COMMENT>    . {/*do nothing*/}
+<COMMENT> [^"*)"]   {/*do nothing*/}
+<COMMENT> . {/*do nothing*/}
 
 <YYINITIAL>    .     {return new Symbol(TokenConstants.ERROR,yytext());}
